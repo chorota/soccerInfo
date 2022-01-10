@@ -8,7 +8,7 @@
       "methods": [
         "get"
       ],
-      "route": "getleague/{category:string?}"
+      "route": "getleague/{category?}"
     },
     {
       "type": "http",

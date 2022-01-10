@@ -1,44 +1,68 @@
 import { AzureFunction, Context, HttpRequest } from "@azure/functions"
-import { CosmosClient } from "@azure/cosmos"
+import { CosmosClient , Item, ItemResponse } from "@azure/cosmos"
 import { cosmosDBconnectionInfo, Cosmosdatabase, Cosmoscontainer } from "../Shared/config"
+import { League } from "../models/League"
 
 const httpTrigger: AzureFunction = async function (context: Context, req: HttpRequest): Promise<void> {
-  //
-  context.log('HTTP trigger function processed a request.');
-  const reqinfoleage = (req.query.leage || (req.body && req.body.leage));
-  const responseMessage = reqinfoleage
-    ? "Hello, " + reqinfoleage + ". This HTTP triggered function executed successfully."
-    : "This HTTP triggered function executed successfully. Pass a name in the query string or in the request body for a personalized response.";
-  //
   
-  const para:string =context.bindingData.category ? context.bindingData.category : null;
-  context.log("パラメータ値："+para);
-
   //CosmosDB接続情報
   const client = new CosmosClient(cosmosDBconnectionInfo);
   const { database } = await client.databases.createIfNotExists({ id: Cosmosdatabase });
   const { container } = await database.containers.createIfNotExists({ id: Cosmoscontainer });
+
   //取得するリーグ情報をチェック
-  const leages: Array<string> = ["BL1", "PL", "DED", "PPL", "FL1", "SA"];
-  //leages.forEach((leage)=>{ if (leage !== reqinfoleage)  return false})
+  
+  
+  //検索クエリ
+  const querySpec = {
+    query: "SELECT * from Items c where c.id = @leaguename",
+    parameters: [
+      {
+        name: "@leaguename",
+        value: null
+      }
+    ]
+  };
+
   //リーグごとに最新データの取得＋登録を繰り返す。
-  let resultdata:string;
+  let resultdatas : Array<ILeague> = new Array<ILeague>();
+
+  const param:string =context.bindingData.category ? context.bindingData.category : null;
+  let leages: Array<string> = new Array<string>();
+  if(param){
+    leages[0] = param;
+  }else{
+    leages = ["BL1", "PL", "DED", "PPL", "FL1", "SA"];
+  }
+  
   try {
     for (let leage of leages) {
       //ランキングデータをCosmosDBから取得する。
       try {
-        context.log.info(await container.item(leage, leage));
-        context.log.info("CosmosDBからのデータ取得完了。");
+        //リーグ情報をSQLクエリのパラメータにセット
+        querySpec.parameters[0].value = leage;
+        const { resources: results } = await container.items.query(querySpec).fetchAll();
+        if (results.length == 0) {
+          throw "取得結果が０件でした。";
+        } else if (results.length > 1) {
+          throw "取得結果が１件以上存在しました。";
+        }
+        let resultdata : League = new League();
+        resultdata.id = results[0].id;
+        resultdata.data = results[0].data;
+        resultdatas.push(resultdata);
+        context.log.info(resultdata);
+        context.log.info("CosmosDBから",leage,"のデータ取得完了。");
       } catch (err) {
         switch (err.code) {
           case 404:
             context.log.error(leage, ":の情報が存在しませんでした。処理を続行します。errの内容:" + err);
             break;
           case 429:
-            context.log.error(leage, ":の削除処理で429TooManyReqestが発生しました。処理を続行します。errの内容:" + err);
+            context.log.error(leage, ":の取得処理で429TooManyReqestが発生しました。処理を続行します。errの内容:" + err);
             break;
           default:
-            context.log.error(leage, ":の削除処理で失敗しました。" + err);
+            context.log.error(leage, ":の取得処理で失敗しました。" + err);
             throw err;
         }
       };
@@ -48,11 +72,19 @@ const httpTrigger: AzureFunction = async function (context: Context, req: HttpRe
   }
 
   //レスポンス情報の作成
-  context.res = {
-    // status: 200, /* Defaults to 200 */
-    staus:200,
-    body: responseMessage
-  };
+  if(resultdatas.length > 0){
+    context.res = {
+      // status: 200, /* Defaults to 200 */
+      status:200,
+      body: resultdatas
+    };
+  }else{
+    context.res = {
+      status:400,
+      body: 'BadRequest:データ取得できないパラメータが設定されています。'
+    };
+  }
+  
 
 };
 
